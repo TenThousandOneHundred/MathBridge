@@ -546,6 +546,33 @@ function assignmentQuestionPrompt(question) {
   return `${question.prompt || "Assignment question"}${choices}`;
 }
 
+function cleanAnswerKeyValue(value) {
+  return cleanText(value).replace(/^\*+\s*/, "").replace(/^\[(?:x|correct)\]\s*/i, "").replace(/\s*\(correct\)$/i, "");
+}
+
+function markedChoiceValue(value) {
+  const raw = cleanText(value);
+  const leadingMarked = /^(?:\*|\[(?:x|correct)\]|\((?:x|correct)\))\s*/i.test(raw);
+  const trailingMarked = /\s*\(correct\)$/i.test(raw);
+  return {
+    choice: cleanAnswerKeyValue(raw),
+    correct: leadingMarked || trailingMarked,
+  };
+}
+
+function publicAssignmentQuestion(question, includeAnswerKey = false) {
+  if (!question || typeof question !== "object") return question;
+  const publicQuestion = {
+    type: question.type,
+    prompt: question.prompt,
+    choices: Array.isArray(question.choices) ? question.choices : [],
+  };
+  if (includeAnswerKey && Array.isArray(question.answerKey) && question.answerKey.length) {
+    publicQuestion.answerKey = question.answerKey;
+  }
+  return publicQuestion;
+}
+
 function mathTutorSystemPrompt() {
   return [
     "You are MathBridge's local AI math tutor.",
@@ -632,6 +659,21 @@ async function localAiTutorReply(context) {
     ...history,
     { role: "user", content: context.message || "I need help getting started." },
   ]);
+}
+
+function keyedTutorReply(context) {
+  if (!studentIsCheckingOwnWork(context)) return "";
+  const keyed = keyedAnswerMatches({
+    type: context.questionType || "text",
+    answerKey: context.answerKey || [],
+    studentAnswer: context.attempt || "",
+  });
+  if (keyed === null) return "";
+  const questionRef = `For question ${Number.isInteger(context.questionIndex) ? context.questionIndex + 1 : ""}`;
+  if (keyed) {
+    return `${questionRef}, your answer matches the teacher's answer key. Before you submit, make sure your written work shows the step or reason that led to it.`;
+  }
+  return `${questionRef}, your answer does not match the teacher's answer key yet. I will not give the answer, but re-read the question and check the first operation or choice you made. What step can you try again?`;
 }
 
 function cleanExtractedText(value, limit = AI_TEXT_LIMIT) {
@@ -926,6 +968,8 @@ async function gradingSubmissionContext(store, teacher, assignment, assignmentWo
     return {
       number: index + 1,
       question: assignmentQuestionPrompt(normalized),
+      type: normalized.type || "text",
+      answerKey: Array.isArray(normalized.answerKey) ? normalized.answerKey : [],
       studentAnswer: normalizedAnswerText(answers[index]) || "No typed answer",
     };
   });
@@ -971,7 +1015,11 @@ function gradeSuggestionPrompt(context) {
     uploadEvidence.length ? `Uploaded work evidence:\n${uploadEvidence.join("\n\n")}` : "",
     "Typed answers:",
     context.rows.length
-      ? context.rows.map((row) => `${row.number}. ${row.question}\nStudent answer: ${row.studentAnswer}`).join("\n")
+      ? context.rows.map((row) => [
+          `${row.number}. ${row.question}`,
+          row.answerKey?.length ? `Teacher answer key: ${row.answerKey.join(", ")}` : "Teacher answer key: not provided",
+          `Student answer: ${row.studentAnswer}`,
+        ].join("\n")).join("\n")
       : "No teacher-made typed questions were included.",
     gradeExamples.length
       ? `Teacher grading history. Use this only to match the teacher's grading style and expectations; current assignment evidence controls the grade.\n${gradeExamples.join("\n\n")}`
@@ -980,6 +1028,8 @@ function gradeSuggestionPrompt(context) {
     "Do not invent rubric requirements, Ontario curriculum criteria, estimation strategies, units, communication marks, or show-your-work penalties unless the assignment text explicitly asks for them.",
     "If you mention a missing strategy, unit, written step, communication detail, or rubric item, it must be directly required by the assignment text above.",
     "If a typed math answer appears correct, grade it as correct. Do not reduce a correct answer to 80% because of a missing strategy.",
+    "When a teacher answer key is provided, use it as the main correctness source for the typed answer.",
+    "For multiple choice and select-all, exact selected choices matching the answer key are correct; do not guess a different answer.",
     "If the visible student work is correct and you see no explicit error or missing required item, grade must be exactly 100. Do not use 97, 98, or 99 for work you describe as correct.",
     "You may use readable uploaded work evidence when it is included above. If an upload status says it was not readable, do not pretend to inspect it.",
     "Use a simple evidence-based score from visible typed answers and readable uploaded work. If correctness cannot be judged from the visible evidence, use null.",
@@ -1157,19 +1207,60 @@ function numericAnswersMatch(actual, expected) {
   return Math.abs(actual - expected) <= Math.max(0.01, Math.abs(expected) * 0.005);
 }
 
+function normalizeGradingAnswer(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[−–—]/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/\*/g, "")
+    .replace(/×/g, "x")
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/%/g, "percent")
+    .replace(/degrees?/g, "");
+}
+
+function keyedAnswerMatches(row) {
+  const answerKey = Array.isArray(row.answerKey) ? row.answerKey.filter(Boolean) : [];
+  if (!answerKey.length) return null;
+  if (row.studentAnswer === "No typed answer") return false;
+  const expected = new Set(answerKey.map(normalizeGradingAnswer));
+  if (row.type === "select-all") {
+    const selected = String(row.studentAnswer || "")
+      .split(",")
+      .map(normalizeGradingAnswer)
+      .filter(Boolean);
+    return selected.length === expected.size && selected.every((choice) => expected.has(choice));
+  }
+  const actual = normalizeGradingAnswer(row.studentAnswer);
+  if (expected.has(actual)) return true;
+  const actualNumber = numericAnswerValue(row.studentAnswer);
+  return answerKey.some((expectedAnswer) => {
+    const expectedNumber = numericAnswerValue(expectedAnswer);
+    return actualNumber !== null && expectedNumber !== null && numericAnswersMatch(actualNumber, expectedNumber);
+  });
+}
+
 function deterministicGradeSuggestion(context) {
   if (!context.rows.length) return null;
   const needsWrittenReview = /(show work|written|steps|upload)/i.test(context.requiredWork || "");
   const hasReadableUploads = (context.uploadEvidence || []).some((item) => item.text);
-  if (needsWrittenReview || hasReadableUploads) return null;
+  const allRowsHaveAnswerKeys = context.rows.every((row) => Array.isArray(row.answerKey) && row.answerKey.length);
+  if ((needsWrittenReview || hasReadableUploads) && !allRowsHaveAnswerKeys) return null;
   const checked = [];
   for (const row of context.rows) {
-    const expected = expectedNumericAnswer(row.question);
-    if (expected === null) return null;
     if (row.studentAnswer === "No typed answer") {
       checked.push({ correct: false });
       continue;
     }
+    const keyed = keyedAnswerMatches(row);
+    if (keyed !== null) {
+      checked.push({ correct: keyed });
+      continue;
+    }
+    const expected = expectedNumericAnswer(row.question);
+    if (expected === null) return null;
     const actual = numericAnswerValue(row.studentAnswer);
     if (actual === null) return null;
     checked.push({ correct: numericAnswersMatch(actual, expected) });
@@ -1330,26 +1421,43 @@ function normalizeAssignmentQuestion(question) {
     const type = ["multiple-choice", "select-all", "text"].includes(question.type) ? question.type : "text";
     const prompt = cleanText(question.prompt || question.q || question.text);
     if (!prompt) return null;
-    const choices = Array.isArray(question.choices)
-      ? question.choices.map((choice) => cleanText(choice)).filter(Boolean).slice(0, 8)
+    const markedChoices = Array.isArray(question.choices)
+      ? question.choices.map(markedChoiceValue).filter((item) => item.choice).slice(0, 8)
+      : [];
+    const choices = markedChoices.map((item) => item.choice);
+    const markedAnswers = markedChoices.filter((item) => item.correct).map((item) => item.choice);
+    const explicitAnswers = Array.isArray(question.answerKey)
+      ? question.answerKey.map(cleanAnswerKeyValue).filter(Boolean).slice(0, 12)
       : [];
     return {
       type: type === "text" || choices.length >= 2 ? type : "text",
       prompt,
       choices: type === "text" ? [] : choices,
+      answerKey: [...new Set([...explicitAnswers, ...markedAnswers])],
     };
   }
 
   const line = cleanText(question);
   if (!line) return null;
+  const answerMatch = line.match(/^ANS(?:WER)?\s*:\s*(.+)$/i);
+  if (answerMatch) {
+    const parts = answerMatch[1].split("|").map(cleanAnswerKeyValue).filter(Boolean);
+    const prompt = parts.shift() || "";
+    return prompt
+      ? { type: "text", prompt, choices: [], answerKey: [...new Set(parts)].slice(0, 12) }
+      : null;
+  }
   const modeMatch = line.match(/^(MC|MULTIPLE CHOICE|ALL|SELECT ALL):\s*(.+)$/i);
   if (!modeMatch) return { type: "text", prompt: line, choices: [] };
 
   const type = /^(ALL|SELECT ALL)$/i.test(modeMatch[1]) ? "select-all" : "multiple-choice";
   const parts = modeMatch[2].split("|").map((part) => cleanText(part)).filter(Boolean);
   const prompt = parts.shift() || "";
+  const markedChoices = parts.map(markedChoiceValue).filter((item) => item.choice).slice(0, 8);
+  const choices = markedChoices.map((item) => item.choice);
+  const answerKey = markedChoices.filter((item) => item.correct).map((item) => item.choice);
   return prompt && parts.length >= 2
-    ? { type, prompt, choices: parts.slice(0, 8) }
+    ? { type, prompt, choices, answerKey: [...new Set(answerKey)].slice(0, 12) }
     : { type: "text", prompt: line, choices: [] };
 }
 
@@ -1548,8 +1656,9 @@ function publicAnnouncementsForUser(store, user) {
     .map((announcement) => publicAnnouncement(announcement, store));
 }
 
-function publicAssignment(assignment, store) {
+function publicAssignment(assignment, store, viewer = null) {
   const teacher = store.users.find((user) => user.id === assignment.teacherId);
+  const includeAnswerKey = Boolean(viewer?.role === "teacher" && viewer.id === assignment.teacherId);
   return {
     id: assignment.id,
     title: assignment.title,
@@ -1557,7 +1666,8 @@ function publicAssignment(assignment, store) {
     className: assignment.className,
     topic: assignment.topic,
     due: assignment.due,
-    questions: assignment.questions,
+    questions: (Array.isArray(assignment.questions) ? assignment.questions : [])
+      .map((question) => publicAssignmentQuestion(question, includeAnswerKey)),
     requiredWork: assignment.requiredWork,
     steps: publicAssignmentSteps(assignment),
     uploadWork: Boolean(assignment.uploadWork),
@@ -1596,7 +1706,7 @@ function publicAssignmentsForUser(store, user) {
   return [...store.assignments]
     .filter((assignment) => assignmentVisibleToUser(assignment, user))
     .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
-    .map((assignment) => publicAssignment(assignment, store));
+    .map((assignment) => publicAssignment(assignment, store, user));
 }
 
 function publicAssignmentDraftsForUser(store, user) {
@@ -1605,7 +1715,7 @@ function publicAssignmentDraftsForUser(store, user) {
     .filter((draft) => draft.teacherId === user.id)
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
     .map((draft) => ({
-      ...publicAssignment(draft, store),
+      ...publicAssignment(draft, store, user),
       assignedStudentIds: [],
       materialIds: Array.isArray(draft.materialIds) ? draft.materialIds : [],
       updatedAt: draft.updatedAt || draft.createdAt,
@@ -2082,8 +2192,11 @@ async function handleApi(req, res, url) {
       sendJson(res, 404, { error: "Assignment not found." });
       return;
     }
-    const question = assignment && Number.isInteger(questionIndex)
-      ? assignmentQuestionPrompt(assignment.questions?.[questionIndex])
+    const questionData = assignment && Number.isInteger(questionIndex)
+      ? normalizeAssignmentQuestion(assignment.questions?.[questionIndex])
+      : null;
+    const question = questionData
+      ? assignmentQuestionPrompt(questionData)
       : "";
     if (!question) {
       sendJson(res, 400, { error: "Choose a real assignment question before asking the AI tutor." });
@@ -2094,16 +2207,21 @@ async function handleApi(req, res, url) {
       topic: assignment?.topic || "",
       questionIndex: Number.isInteger(questionIndex) ? questionIndex : null,
       question,
+      questionType: questionData?.type || "text",
+      answerKey: Array.isArray(questionData?.answerKey) ? questionData.answerKey : [],
       message,
       attempt,
       history,
     };
 
     let source = "local-ai";
-    let reply;
+    let reply = keyedTutorReply(context);
+    if (reply) {
+      source = "mathbridge-key";
+    }
     try {
-      reply = await localAiTutorReply(context);
-      if (looksLikeFinalAnswer(reply) && !studentIsCheckingOwnWork(context)) {
+      if (!reply) reply = await localAiTutorReply(context);
+      if (source === "local-ai" && looksLikeFinalAnswer(reply) && !studentIsCheckingOwnWork(context)) {
         source = "guided-fallback";
         reply = guidedTutorFallback(context);
       }
@@ -2115,7 +2233,7 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       reply,
       source,
-      model: source === "local-ai" ? LOCAL_AI_MODEL : "guided-fallback",
+      model: source === "local-ai" ? LOCAL_AI_MODEL : source,
     });
     return;
   }
@@ -2674,7 +2792,7 @@ async function handleApi(req, res, url) {
     };
     store.assignmentDrafts.push(draft);
     saveStore(store);
-    sendJson(res, 201, { draft: publicAssignment(draft, store), drafts: publicAssignmentDraftsForUser(store, auth.user) });
+    sendJson(res, 201, { draft: publicAssignment(draft, store, auth.user), drafts: publicAssignmentDraftsForUser(store, auth.user) });
     return;
   }
 
@@ -2729,7 +2847,7 @@ async function handleApi(req, res, url) {
     store.assignments.push(assignment);
     saveStore(store);
     sendJson(res, 200, {
-      assignment: publicAssignment(assignment, store),
+      assignment: publicAssignment(assignment, store, auth.user),
       assignments: publicAssignmentsForUser(store, auth.user),
       drafts: publicAssignmentDraftsForUser(store, auth.user),
     });
@@ -2892,7 +3010,7 @@ async function handleApi(req, res, url) {
     saveStore(store);
 
     sendJson(res, 201, {
-      assignment: publicAssignment(assignment, store),
+      assignment: publicAssignment(assignment, store, auth.user),
       assignments: publicAssignmentsForUser(store, auth.user),
     });
     return;

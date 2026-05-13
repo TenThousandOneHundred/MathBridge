@@ -212,6 +212,7 @@ const state = {
     bridgeQuestionMode: "text",
     bridgeQuestionPrompt: "",
     bridgeQuestionChoices: "",
+    bridgeQuestionAnswers: "",
     lessonVideoLink: "",
     watchLesson: true,
     readNotes: true,
@@ -988,26 +989,55 @@ function normalizeHomeworkQuestion(question) {
   if (question && typeof question === "object") {
     const type = ["multiple-choice", "select-all", "text"].includes(question.type) ? question.type : "text";
     const prompt = String(question.prompt || question.q || question.text || "").trim();
-    const choices = Array.isArray(question.choices)
-      ? question.choices.map((choice) => String(choice || "").trim()).filter(Boolean)
+    const markedChoices = Array.isArray(question.choices)
+      ? question.choices.map(markedChoiceValue).filter((item) => item.choice)
       : [];
+    const choices = markedChoices.map((item) => item.choice);
     return {
       type: type === "text" || choices.length >= 2 ? type : "text",
       prompt,
       choices: type === "text" ? [] : choices,
+      answerKey: Array.isArray(question.answerKey) ? question.answerKey.map(cleanQuestionAnswerValue).filter(Boolean) : [],
     };
   }
   return parseQuestionLine(question);
 }
 
+function cleanQuestionAnswerValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\*+\s*/, "")
+    .replace(/^\[(?:x|correct)\]\s*/i, "")
+    .replace(/\s*\(correct\)$/i, "");
+}
+
+function markedChoiceValue(value) {
+  const raw = String(value || "").trim();
+  const leadingMarked = /^(?:\*|\[(?:x|correct)\]|\((?:x|correct)\))\s*/i.test(raw);
+  const trailingMarked = /\s*\(correct\)$/i.test(raw);
+  return {
+    choice: cleanQuestionAnswerValue(raw),
+    correct: leadingMarked || trailingMarked,
+  };
+}
+
 function parseQuestionLine(line) {
   const text = String(line || "").trim();
+  const answerMatch = text.match(/^ANS(?:WER)?\s*:\s*(.+)$/i);
+  if (answerMatch) {
+    const parts = answerMatch[1].split("|").map(cleanQuestionAnswerValue).filter(Boolean);
+    const prompt = parts.shift() || text;
+    return { type: "text", prompt, choices: [], answerKey: parts };
+  }
   const modeMatch = text.match(/^(MC|MULTIPLE CHOICE|ALL|SELECT ALL):\s*(.+)$/i);
   if (!modeMatch) return { type: "text", prompt: text, choices: [] };
   const type = /^(ALL|SELECT ALL)$/i.test(modeMatch[1]) ? "select-all" : "multiple-choice";
   const parts = modeMatch[2].split("|").map((part) => part.trim()).filter(Boolean);
   const prompt = parts.shift() || text;
-  return prompt && parts.length >= 2 ? { type, prompt, choices: parts } : { type: "text", prompt: text, choices: [] };
+  const markedChoices = parts.map(markedChoiceValue).filter((item) => item.choice);
+  const choices = markedChoices.map((item) => item.choice);
+  const answerKey = markedChoices.filter((item) => item.correct).map((item) => item.choice);
+  return prompt && choices.length >= 2 ? { type, prompt, choices, answerKey } : { type: "text", prompt: text, choices: [] };
 }
 
 function questionModeLabel(question) {
@@ -3103,6 +3133,10 @@ function renderBridgeSpaceQuestionBuilder(questions) {
             <textarea id="bridge-question-choices" data-bind="draft.bridgeQuestionChoices" placeholder="One choice per line, or separate with |">${escapeHtml(state.draft.bridgeQuestionChoices)}</textarea>
           </div>
         `}
+        <div class="field full">
+          <label for="bridge-question-answers">${mode === "text" ? "Accepted answer(s)" : "Correct choice(s)"}</label>
+          <textarea id="bridge-question-answers" data-bind="draft.bridgeQuestionAnswers" placeholder="${mode === "text" ? "Example: x = 5 | 5" : "Paste exact correct choice(s), one per line or separated with |"}">${escapeHtml(state.draft.bridgeQuestionAnswers)}</textarea>
+        </div>
       </div>
       <div class="actions">
         <button class="btn primary" data-action="add-bridgespace-question">Add BridgeSpace question</button>
@@ -3136,12 +3170,20 @@ function bridgeSpaceQuestionStep(questionCount) {
 function resetBridgeSpaceQuestionBuilder() {
   state.draft.bridgeQuestionPrompt = "";
   state.draft.bridgeQuestionChoices = "";
+  state.draft.bridgeQuestionAnswers = "";
 }
 
 function bridgeQuestionChoices() {
   return state.draft.bridgeQuestionChoices
     .split(/\r?\n|\|/)
     .map((choice) => choice.trim())
+    .filter(Boolean);
+}
+
+function bridgeQuestionAnswers() {
+  return state.draft.bridgeQuestionAnswers
+    .split(/\r?\n|\|/)
+    .map(cleanQuestionAnswerValue)
     .filter(Boolean);
 }
 
@@ -3155,6 +3197,7 @@ function addBridgeSpaceQuestion() {
   }
 
   let line = prompt;
+  const answers = bridgeQuestionAnswers();
   if (mode !== "text") {
     const choices = bridgeQuestionChoices();
     if (choices.length < 2) {
@@ -3162,7 +3205,23 @@ function addBridgeSpaceQuestion() {
       render();
       return;
     }
-    line = `${mode === "select-all" ? "ALL" : "MC"}: ${prompt} | ${choices.join(" | ")}`;
+    if (mode === "multiple-choice" && answers.length > 1) {
+      state.draft.notice = "Multiple choice questions can have one correct answer. Use select all for more than one.";
+      render();
+      return;
+    }
+    const normalizedChoices = new Map(choices.map((choice) => [cleanQuestionAnswerValue(choice).toLowerCase(), choice]));
+    const missingAnswers = answers.filter((answer) => !normalizedChoices.has(answer.toLowerCase()));
+    if (missingAnswers.length) {
+      state.draft.notice = "Correct choices must match one of the choices exactly.";
+      render();
+      return;
+    }
+    const answerSet = new Set(answers.map((answer) => answer.toLowerCase()));
+    const markedChoices = choices.map((choice) => answerSet.has(cleanQuestionAnswerValue(choice).toLowerCase()) ? `*${choice}` : choice);
+    line = `${mode === "select-all" ? "ALL" : "MC"}: ${prompt} | ${markedChoices.join(" | ")}`;
+  } else if (answers.length) {
+    line = `ANS: ${prompt} | ${answers.join(" | ")}`;
   }
 
   const existing = state.draft.questionText.trim();
@@ -3185,6 +3244,7 @@ function renderDraftQuestionPreview(question) {
     <li>
       <span class="math-text">${escapeHtml(normalized.prompt)}</span>
       <span class="pill">${questionModeLabel(normalized)}</span>
+      ${normalized.answerKey?.length ? `<span class="pill green">Answer key saved</span>` : ""}
       ${normalized.choices.length ? `<small>${normalized.choices.map(escapeHtml).join(" / ")}</small>` : ""}
     </li>
   `;
@@ -5602,7 +5662,8 @@ function handleInput(event) {
     bind === "draft.due" ||
     bind === "draft.lessonVideoLink" ||
     bind === "draft.bridgeQuestionPrompt" ||
-    bind === "draft.bridgeQuestionChoices"
+    bind === "draft.bridgeQuestionChoices" ||
+    bind === "draft.bridgeQuestionAnswers"
   ) {
     state.draft.notice = "";
     return;
