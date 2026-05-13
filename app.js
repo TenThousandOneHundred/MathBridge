@@ -6728,13 +6728,18 @@ async function handleMessageAction(action, button) {
 
 async function sendMessage(viewer) {
   const text = state.messaging.draft[viewer].trim();
-  const recipientId = state.messaging.composeTo[viewer] || getRecipientOptions(viewer)[0]?.id || "";
+  const recipients = getRecipientOptions(viewer);
+  const recipientId = state.messaging.composeTo[viewer] || recipients[0]?.id || "";
   if (!text) {
     state.messaging.notice = "Write a message before sending.";
     return;
   }
   if (!recipientId) {
     state.messaging.notice = "Create another account before messaging.";
+    return;
+  }
+  if (!recipients.some((recipient) => recipient.id === recipientId)) {
+    state.messaging.notice = messageAccessNotice();
     return;
   }
 
@@ -6802,21 +6807,42 @@ function getSelectedMessage(viewer) {
   return selected || rows[0] || null;
 }
 
+function canMessageRecipient(user) {
+  const currentUser = state.auth.user;
+  if (!currentUser || !user || user.id === currentUser.id) return false;
+  if (currentUser.role === "student") {
+    return user.role === "teacher" || (user.role === "parent" && user.linkedStudentId === currentUser.id);
+  }
+  if (currentUser.role === "parent") {
+    return user.role === "teacher" || (user.role === "student" && currentUser.linkedStudentId === user.id);
+  }
+  return true;
+}
+
+function messageAccessNotice() {
+  if (state.auth.user?.role === "student") return "Students can only message teachers and their linked parent.";
+  if (state.auth.user?.role === "parent") return "Parents can only message teachers and their linked child.";
+  return "You can only message users connected to your account.";
+}
+
 function getRecipientOptions(viewer) {
   const selected = getSelectedMessage(viewer);
-  const currentUserId = state.auth.user?.id;
-  const options = state.directory.users.filter((user) => user.id !== currentUserId);
-  if (selected?.recipientId && !options.some((user) => user.id === selected.recipientId)) {
-    options.push({
-      id: selected.recipientId,
-      name: selected.recipientName || selected.sender,
-      role: selected.recipientRole || "user",
-    });
+  const options = state.directory.users.filter((user) => canMessageRecipient(user));
+  const selectedUser = state.directory.users.find((user) => user.id === selected?.recipientId);
+  if (selectedUser && canMessageRecipient(selectedUser) && !options.some((user) => user.id === selectedUser.id)) {
+    options.push(selectedUser);
   }
   return options;
 }
 
 function selectConversationForRecipient(viewer, recipientId) {
+  const recipient = state.directory.users.find((user) => user.id === recipientId);
+  if (!canMessageRecipient(recipient)) {
+    state.messaging.composeTo[viewer] = getRecipientOptions(viewer)[0]?.id || "";
+    state.messaging.selected[viewer] = "";
+    state.messaging.notice = messageAccessNotice();
+    return;
+  }
   const match = mailboxes[viewer]?.find((message) => message.recipientId === recipientId);
   state.messaging.selected[viewer] = match ? match.id : "";
   const label = recipientLabel(recipientId);
@@ -6832,7 +6858,7 @@ function ensureMessageSelection(viewer) {
 function ensureMessageRecipient(viewer) {
   const selected = getSelectedMessage(viewer);
   const recipients = getRecipientOptions(viewer);
-  if (selected?.recipientId) {
+  if (selected?.recipientId && recipients.some((recipient) => recipient.id === selected.recipientId)) {
     state.messaging.composeTo[viewer] = selected.recipientId;
     return;
   }

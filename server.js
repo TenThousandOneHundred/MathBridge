@@ -368,6 +368,17 @@ function directoryUsersForUser(store, viewer) {
   return [viewer];
 }
 
+function canMessageUser(store, sender, recipient) {
+  if (!sender || !recipient || sender.id === recipient.id) return false;
+  return directoryUsersForUser(store, sender).some((user) => user.id === recipient.id);
+}
+
+function messageAccessError(user) {
+  if (user?.role === "student") return "Students can only message teachers and their linked parent.";
+  if (user?.role === "parent") return "Parents can only message teachers and their linked child.";
+  return "You can only message users connected to your account.";
+}
+
 function teacherClassStudentIds(teacher, store) {
   const validStudentIds = new Set(store.users.filter((user) => user.role === "student").map((user) => user.id));
   const classes = Array.isArray(teacher?.classes) ? teacher.classes : [];
@@ -423,13 +434,21 @@ function sameParticipants(left, right) {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
+function conversationAllowedForUser(store, conversation, user) {
+  if (!Array.isArray(conversation?.participantIds) || !conversation.participantIds.includes(user.id)) return false;
+  const otherId = conversation.participantIds.find((userId) => userId !== user.id);
+  const other = store.users.find((candidate) => candidate.id === otherId);
+  return canMessageUser(store, user, other);
+}
+
 function conversationsForUser(store, user) {
   const users = userMap(store);
   return store.messages
     .filter(
       (conversation) =>
         conversation.participantIds.includes(user.id) &&
-        !(conversation.hiddenFor || []).includes(user.id),
+        !(conversation.hiddenFor || []).includes(user.id) &&
+        conversationAllowedForUser(store, conversation, user),
     )
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
     .map((conversation) => publicConversation(conversation, user, users));
@@ -3572,8 +3591,8 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: "Choose a valid recipient." });
       return;
     }
-    if (!directoryUsersForUser(store, auth.user).some((user) => user.id === recipient.id)) {
-      sendJson(res, 403, { error: "You can only message users connected to your account." });
+    if (!canMessageUser(store, auth.user, recipient)) {
+      sendJson(res, 403, { error: messageAccessError(auth.user) });
       return;
     }
     if (!text) {
@@ -3610,6 +3629,10 @@ async function handleApi(req, res, url) {
       (item) => item.id === conversationId && item.participantIds.includes(auth.user.id),
     );
     if (!conversation) {
+      sendJson(res, 404, { error: "Conversation not found." });
+      return;
+    }
+    if (!conversationAllowedForUser(store, conversation, auth.user)) {
       sendJson(res, 404, { error: "Conversation not found." });
       return;
     }
