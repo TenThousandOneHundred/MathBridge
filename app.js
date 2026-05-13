@@ -2409,8 +2409,12 @@ function renderLessonsPage() {
             <h2>Current Lesson</h2>
             <p>${escapeHtml(current.title)}.</p>
           </div>
-          <span class="pill green">Assigned</span>
+          <div class="actions">
+            <span class="pill green">Assigned</span>
+            ${renderLessonTakeDownButton(current)}
+          </div>
         </div>
+        ${state.role === "teacher" && state.teacherLesson.status ? `<div class="message-notice">${escapeHtml(state.teacherLesson.status)}</div>` : ""}
         ${renderLessonMedia(current, "large")}
         <div class="example-board" style="margin-top: 14px;">
           <strong>Learning goal: ${escapeHtml(current.goal)}</strong>
@@ -2419,7 +2423,12 @@ function renderLessonsPage() {
         </div>
       </div>
       <div class="surface">
-        <h2>Lesson Library</h2>
+        <div class="section-head">
+          <div>
+            <h2>Lesson Library</h2>
+            <p>${state.role === "teacher" ? "Teacher-owned lessons can be taken down here." : "Lessons posted by your teacher."}</p>
+          </div>
+        </div>
         <div class="lesson-list" style="margin-top: 14px;">
           ${library.map(renderLessonCard).join("")}
         </div>
@@ -4620,7 +4629,7 @@ function renderChecklist(item) {
 }
 
 function renderLessonCard(lesson) {
-  const canTakeDown = state.role === "teacher" && state.page === "Upload Lesson" && lesson.id;
+  const takeDownButton = renderLessonTakeDownButton(lesson);
   return `
     <article class="lesson-card">
       <h3>${escapeHtml(lesson.title)}</h3>
@@ -4631,13 +4640,23 @@ function renderLessonCard(lesson) {
         <span>${escapeHtml(lesson.practice || "Practice questions")}</span>
         <span>${escapeHtml(lesson.quiz || "Mini quiz")}</span>
       </div>
-      ${canTakeDown ? `
+      ${takeDownButton ? `
         <div class="actions" style="margin-top: 12px;">
-          <button class="btn coral" data-action="delete-lesson" data-lesson="${escapeHtml(lesson.id)}">Take down</button>
+          ${takeDownButton}
         </div>
       ` : ""}
     </article>
   `;
+}
+
+function renderLessonTakeDownButton(lesson) {
+  const hasOwnershipFlag = Object.prototype.hasOwnProperty.call(lesson || {}, "canTakeDown");
+  const canTakeDown =
+    state.role === "teacher" &&
+    lesson?.id &&
+    (lesson.canTakeDown || (!hasOwnershipFlag && state.page === "Upload Lesson"));
+  if (!canTakeDown) return "";
+  return `<button class="btn coral" data-action="delete-lesson" data-lesson="${escapeHtml(lesson.id)}">Take down</button>`;
 }
 
 function renderLessonMedia(lesson, size = "card") {

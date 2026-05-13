@@ -652,6 +652,16 @@ function uploadPathFromUrl(url) {
   return fs.existsSync(filePath) ? filePath : "";
 }
 
+function removeUploadedFile(url) {
+  const filePath = uploadPathFromUrl(url);
+  if (!filePath) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    // Taking a lesson down should not fail just because an old upload is already gone.
+  }
+}
+
 function decodeXmlText(value) {
   return String(value || "")
     .replace(/&amp;/g, "&")
@@ -1418,7 +1428,7 @@ function publicAssignmentSteps(assignment) {
   return normalized;
 }
 
-function publicLesson(lesson, store) {
+function publicLesson(lesson, store, viewer = null) {
   const teacher = store.users.find((user) => user.id === lesson.teacherId);
   return {
     id: lesson.id,
@@ -1432,13 +1442,14 @@ function publicLesson(lesson, store) {
     videoType: lesson.videoType || "",
     teacherName: teacher?.name || lesson.teacherName || "Teacher",
     createdAt: lesson.createdAt,
+    canTakeDown: Boolean(viewer?.role === "teacher" && lesson.teacherId === viewer.id),
   };
 }
 
-function publicLessons(store) {
+function publicLessons(store, viewer = null) {
   return [...store.lessons]
     .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
-    .map((lesson) => publicLesson(lesson, store));
+    .map((lesson) => publicLesson(lesson, store, viewer));
 }
 
 function publicMaterial(material, store) {
@@ -2404,7 +2415,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 401, { error: "Not authenticated." });
       return;
     }
-    sendJson(res, 200, { lessons: publicLessons(store) });
+    sendJson(res, 200, { lessons: publicLessons(store, auth.user) });
     return;
   }
 
@@ -2577,7 +2588,7 @@ async function handleApi(req, res, url) {
     };
     store.lessons.push(lesson);
     saveStore(store);
-    sendJson(res, 201, { lesson: publicLesson(lesson, store), lessons: publicLessons(store) });
+    sendJson(res, 201, { lesson: publicLesson(lesson, store, auth.user), lessons: publicLessons(store, auth.user) });
     return;
   }
 
@@ -2601,9 +2612,10 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    store.lessons.splice(index, 1);
+    const [lesson] = store.lessons.splice(index, 1);
+    removeUploadedFile(lesson.videoUrl);
     saveStore(store);
-    sendJson(res, 200, { lessons: publicLessons(store) });
+    sendJson(res, 200, { lessons: publicLessons(store, auth.user) });
     return;
   }
 
