@@ -2,8 +2,9 @@
   "name": "mathbridge",
   "version": "1.0.0",
   "private": true,
-  "description": "MathBridge local prototype with server-side authentication.",
+  "description": "MathBridge deployable math classroom app with server-side authentication.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:hosted": "NODE_ENV=production HOST=0.0.0.0 node server.js"
   }
 }

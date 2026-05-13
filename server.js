@@ -5,12 +5,17 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
-const HOST = process.env.HOST || "127.0.0.1";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const HOST = process.env.HOST || (IS_PRODUCTION ? "0.0.0.0" : "127.0.0.1");
 const PORT = Number(process.env.PORT || 8080);
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = path.resolve(process.env.MATHBRIDGE_DATA_DIR || path.join(ROOT, "data"));
 const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 const STORE_PATH = path.join(DATA_DIR, "auth-store.json");
+const PUBLIC_URL = String(process.env.MATHBRIDGE_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "");
+const SECURE_COOKIES = process.env.MATHBRIDGE_SECURE_COOKIES
+  ? process.env.MATHBRIDGE_SECURE_COOKIES !== "0"
+  : IS_PRODUCTION;
 const COOKIE_NAME = "mathbridge_session";
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const BODY_LIMIT = 1024 * 1024;
@@ -322,7 +327,9 @@ function ensureStore() {
 }
 
 function saveStore(store) {
-  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`);
+  const tempPath = `${STORE_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(store, null, 2)}\n`);
+  fs.renameSync(tempPath, STORE_PATH);
 }
 
 function publicClass(classItem) {
@@ -1930,6 +1937,7 @@ function parseCookies(header = "") {
 
 function sessionCookie(token, maxAgeSeconds) {
   const parts = [`${COOKIE_NAME}=${encodeURIComponent(token)}`, "HttpOnly", "SameSite=Lax", "Path=/"];
+  if (SECURE_COOKIES) parts.push("Secure");
   if (maxAgeSeconds === 0) {
     parts.push("Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT");
   } else {
@@ -2180,6 +2188,8 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       host: HOST,
       port: PORT,
+      publicUrl: PUBLIC_URL,
+      hosted: IS_PRODUCTION || Boolean(PUBLIC_URL),
       localUrl: `http://127.0.0.1:${PORT}`,
       lanEnabled: HOST === "0.0.0.0" || HOST === "::",
       lanUrls: HOST === "0.0.0.0" || HOST === "::" ? localNetworkUrls() : [],
@@ -3737,4 +3747,6 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOST, () => {
   ensureStore();
   console.log(`MathBridge running at http://${HOST}:${PORT}`);
+  if (PUBLIC_URL) console.log(`MathBridge public URL: ${PUBLIC_URL}`);
+  console.log(`MathBridge data directory: ${DATA_DIR}`);
 });

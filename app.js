@@ -141,6 +141,8 @@ const state = {
     pointer: "",
   },
   system: {
+    publicUrl: "",
+    hosted: false,
     localUrl: "",
     lanEnabled: false,
     lanUrls: [],
@@ -2410,17 +2412,20 @@ function renderHomeworkPage() {
 function renderWorkDevicePanel() {
   const ipadUrl = state.system.lanUrls[0] || "http://your-mac-ip:8086";
   const localUrl = state.system.localUrl || "http://127.0.0.1:8086";
-  const ipadStatus = state.system.lanEnabled ? ipadUrl : "Needs local network approval";
+  const sharedUrl = state.system.publicUrl || (state.system.lanEnabled ? ipadUrl : localUrl);
+  const ipadStatus = state.system.publicUrl || (state.system.lanEnabled ? ipadUrl : "Needs local network approval");
+  const connectionReady = state.system.hosted || state.system.lanEnabled;
   return `
     <section class="surface ipad-work-panel">
       <div class="section-head">
         <div>
           <h2>iPad Work Pad</h2>
-          <p>Open MathBridge on iPad, then use Apple Pencil in Draw Work.</p>
+          <p>Open the same MathBridge link on iPad, then use Apple Pencil in Draw Work.</p>
         </div>
-        <span class="pill ${state.system.lanEnabled ? "green" : "amber"}">${state.system.lanEnabled ? "Pencil ready" : "Mac only"}</span>
+        <span class="pill ${connectionReady ? "green" : "amber"}">${state.system.hosted ? "Hosted" : state.system.lanEnabled ? "Pencil ready" : "Mac only"}</span>
       </div>
       <div class="assignment-meta ipad-links" style="margin-top: 12px;">
+        <span>Shared link: ${escapeHtml(sharedUrl)}</span>
         <span>Mac: ${escapeHtml(localUrl)}</span>
         <span>iPad: ${escapeHtml(ipadStatus)}</span>
       </div>
@@ -5939,7 +5944,7 @@ async function logout() {
   state.submitComments = {};
   state.drawing = { assignmentId: "", color: "#146b53", size: 4, status: "", pointer: "" };
   state.bridgeSpace = { assignmentId: "", questionIndex: 0, tab: "practice", working: "", notice: "" };
-  state.system = { localUrl: "", lanEnabled: false, lanUrls: [] };
+  state.system = { publicUrl: "", hosted: false, localUrl: "", lanEnabled: false, lanUrls: [] };
   state.materialLibrary = [];
   state.materialDraft = { title: "", kind: "worksheet", link: "", status: "", submitting: false };
   state.assignmentLibrary = [];
@@ -6123,10 +6128,14 @@ async function loadSystemInfo() {
     });
     if (!response.ok) return;
     const result = await response.json();
+    state.system.publicUrl = result.publicUrl || "";
+    state.system.hosted = Boolean(result.hosted);
     state.system.localUrl = result.localUrl || "";
     state.system.lanEnabled = Boolean(result.lanEnabled);
     state.system.lanUrls = Array.isArray(result.lanUrls) ? result.lanUrls : [];
   } catch (error) {
+    state.system.publicUrl = "";
+    state.system.hosted = false;
     state.system.localUrl = "";
     state.system.lanEnabled = false;
     state.system.lanUrls = [];
