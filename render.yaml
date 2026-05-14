@@ -2,7 +2,7 @@ services:
   - type: web
     name: mathbridge
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
@@ -13,10 +13,6 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: MATHBRIDGE_DATA_DIR
-        value: /var/data
+        value: /tmp/mathbridge-data
       - key: MATHBRIDGE_SECURE_COOKIES
         value: "1"
-    disk:
-      name: mathbridge-data
-      mountPath: /var/data
-      sizeGB: 1

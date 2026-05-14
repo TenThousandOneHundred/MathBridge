@@ -5,6 +5,8 @@ includes homework assignment flows, lesson materials, BridgeSpace practice,
 messages, attendance, parent student linking, teacher grading, and server-side
 authentication.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/TenThousandOneHundred/MathBridge)
+
 Run the local authenticated app:
 
 ```sh
@@ -47,11 +49,18 @@ The app uses a single-server JSON store. Run one hosted instance connected to
 one persistent data directory. If the app grows past a prototype, migrate the
 store to Postgres or another database before scaling to multiple instances.
 
-### Render Blueprint
+### Free Render Blueprint
 
-`render.yaml` defines a one-instance Render web service with a persistent disk
-mounted at `/var/data`. Connect this GitHub repo to Render as a Blueprint and
-keep the persistent disk attached so user data is not lost between deploys.
+`render.yaml` defines a one-instance Render Free web service. This is useful for
+trying MathBridge online without paying, but it is not good for real class data:
+Render Free web services spin down when idle and their local filesystem is
+ephemeral, so accounts, messages, uploads, assignments, and grades can disappear
+after a restart, redeploy, or spin-down.
+
+For durable class use on Render, switch the service to at least the Starter web
+service and attach a persistent disk, or migrate MathBridge data to Postgres.
+Current Render pricing lists Starter web services at $7/month and persistent
+disks at $0.25/GB/month.
 
 ### Docker
 
