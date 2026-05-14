@@ -1896,6 +1896,14 @@ function render() {
     return;
   }
   ensureRolePage();
+  const activeBridgeAssignment = state.role === "student" ? currentBridgeSpaceAssignment() : null;
+  if (activeBridgeAssignment) {
+    app.innerHTML = renderBridgeSpaceExperience(activeBridgeAssignment);
+    requestAnimationFrame(() => {
+      initWorkCanvas();
+    });
+    return;
+  }
   app.innerHTML = `
     <div class="app-shell">
       ${renderSidebar()}
@@ -4092,80 +4100,82 @@ function renderAssignmentMaterials(item) {
 }
 
 function renderBridgeSpacePanel(item) {
-  const active = state.bridgeSpace.assignmentId === item.id;
-  if (!active) {
-    return `
-      <div class="bridge-launch">
-        <div>
-          <strong>BridgeSpace workspace</strong>
-          <span>Practice questions, hints, lesson tools, working space, and a math keyboard in one place.</span>
-        </div>
-        <button class="btn primary" data-action="open-bridgespace" data-assignment="${escapeHtml(item.id)}">Open BridgeSpace</button>
+  return `
+    <div class="bridge-launch">
+      <div>
+        <strong>BridgeSpace activity</strong>
+        <span>Opens as a separate full-screen question space with tools, steps, hints, and lesson support.</span>
       </div>
-    `;
-  }
+      <button class="btn primary" data-action="open-bridgespace" data-assignment="${escapeHtml(item.id)}">Start BridgeSpace</button>
+    </div>
+  `;
+}
 
+function renderBridgeSpaceExperience(item) {
   const questions = Array.isArray(item.questions) ? item.questions.map(normalizeHomeworkQuestion).filter((question) => question.prompt) : [];
   const questionCount = Math.max(questions.length, 1);
   const questionIndex = Math.min(Math.max(Number(state.bridgeSpace.questionIndex) || 0, 0), questionCount - 1);
   const question = questions[questionIndex] || { type: "text", prompt: "Complete the attached teacher material.", choices: [] };
   const answers = answerDraftsForAssignment(item);
   const answer = answers[questionIndex];
-  const progressValue = Math.round(((questionIndex + 1) / questionCount) * 100);
   const inputId = `bridge-answer-${safeDomId(item.id)}-${questionIndex}`;
   const tab = state.bridgeSpace.tab || "practice";
+  const answered = typedAnswerCount(item);
+  const progressValue = Math.round(((questionIndex + 1) / questionCount) * 100);
+  const hasAnswer = bridgeAnswerHasValue(answer);
+  const isLastQuestion = questionIndex >= questionCount - 1;
+  const title = item.title || "BridgeSpace";
+  const points = answered * 10;
 
   return `
-    <section class="bridge-space" aria-label="BridgeSpace assignment workspace">
-      <div class="bridge-topbar">
-        <div class="bridge-brand">
-          <span class="bridge-logo">B</span>
-          <strong>BridgeSpace</strong>
+    <main class="bridge-experience" aria-label="BridgeSpace activity">
+      <header class="bridge-full-header">
+        <button class="bridge-back-button" data-action="close-bridgespace" aria-label="Back to homework">←</button>
+        <div class="bridge-activity-mark" aria-hidden="true">
+          <span>2</span>
+          <span>3</span>
         </div>
-        <div class="bridge-breadcrumb">
-          <span>${escapeHtml(item.topic)}</span>
-          <span>${escapeHtml(item.title)}</span>
-          <span>Question ${questionIndex + 1} of ${questionCount}</span>
+        <div class="bridge-full-title">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(item.topic)} · ${questionModeLabel(question)}</span>
         </div>
-        <div class="bridge-user-chip">
-          <span>Score: --</span>
-          <button class="btn" data-action="close-bridgespace">Close</button>
+        <div class="bridge-reward-strip" aria-label="${answered} answered questions">
+          ${[0, 1, 2].map((index) => `<span class="${answered > index ? "earned" : ""}">★</span>`).join("")}
+          <button class="bridge-dropdown-button" data-action="bridge-tab" data-tab="${tab === "practice" ? "lesson" : "practice"}" aria-label="Switch BridgeSpace tool">⌄</button>
+          <div class="bridge-points">
+            <strong>⚡ ${points}</strong>
+            <span>${answered}/${questionCount}</span>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div class="bridge-progress-row">
-        <strong>Question ${questionIndex + 1} of ${questionCount}</strong>
+      <section class="bridge-full-progress">
+        <span>Question ${questionIndex + 1} of ${questionCount}</span>
         <div class="bridge-progress" aria-label="${progressValue} percent through BridgeSpace">
           <span style="width: ${progressValue}%;"></span>
         </div>
-        <div class="bridge-question-actions">
-          <button class="btn" data-action="bridge-prev" ${questionIndex === 0 ? "disabled" : ""}>Back</button>
-          <button class="btn" data-action="bridge-next" ${questionIndex >= questionCount - 1 ? "disabled" : ""}>Next</button>
-        </div>
+      </section>
+
+      <div class="bridge-full-stage">
+        ${renderBridgeSpaceTabContent(item, question, questionIndex, answer, inputId)}
       </div>
 
-      <div class="bridge-tabs" role="tablist">
-        ${["lesson", "practice", "worksheet"].map((name) => `
-          <button class="${tab === name ? "active" : ""}" data-action="bridge-tab" data-tab="${name}">
-            ${name === "lesson" ? "Lesson" : name === "practice" ? "Practice" : "Worksheet"}
-          </button>
-        `).join("")}
-      </div>
+      <aside class="bridge-full-tools" aria-label="BridgeSpace tools">
+        <button data-action="bridge-help" data-assignment="${escapeHtml(item.id)}"><span>?</span>Help</button>
+        <button data-action="bridge-tab" data-tab="lesson"><span>L</span>Lesson</button>
+        <button data-action="bridge-tab" data-tab="toolbox"><span>▦</span>Toolbox</button>
+        <button data-action="bridge-tab" data-tab="worksheet"><span>⋮</span>More</button>
+      </aside>
 
-      <div class="bridge-main">
-        <div>
-          ${renderBridgeSpaceTabContent(item, question, questionIndex, answer, inputId)}
-          ${renderBridgeKeyboard(item)}
-        </div>
-        <aside class="bridge-side-tools" aria-label="BridgeSpace tools">
-          <button data-action="bridge-help" data-assignment="${escapeHtml(item.id)}"><span>?</span>Help</button>
-          <button data-action="bridge-tab" data-tab="lesson"><span>i</span>Lesson</button>
-          <button data-page="Practice"><span>+</span>Calculator</button>
-          <button data-action="open-drawing" data-assignment="${escapeHtml(item.id)}"><span>...</span>More</button>
-        </aside>
-      </div>
-      ${state.aiHelp.assignmentId === item.id ? renderAssignmentAiHelpPanel(item) : ""}
-    </section>
+      <footer class="bridge-full-footer">
+        <button class="bridge-submit-step ${hasAnswer ? "ready" : ""}" data-action="bridge-check" data-assignment="${escapeHtml(item.id)}">Submit step</button>
+        <button class="bridge-next-step" data-action="bridge-next" data-assignment="${escapeHtml(item.id)}" ${isLastQuestion ? "disabled" : ""}>
+          View next step <span>⌄</span>
+        </button>
+      </footer>
+      ${renderBridgeFeedback(item, isLastQuestion)}
+      ${state.aiHelp.assignmentId === item.id ? `<section class="bridge-full-ai">${renderAssignmentAiHelpPanel(item)}</section>` : ""}
+    </main>
   `;
 }
 
@@ -4208,25 +4218,91 @@ function renderBridgeSpaceTabContent(item, question, questionIndex, answer, inpu
     `;
   }
 
+  if (tab === "toolbox") {
+    return `
+      <div class="bridge-card bridge-toolbox-card">
+        <span class="bridge-pill">Toolbox</span>
+        <h3>Math tools</h3>
+        <div class="bridge-tool-grid">
+          <button class="btn" data-action="bridge-key" data-key="+">Add</button>
+          <button class="btn" data-action="bridge-key" data-key="-">Subtract</button>
+          <button class="btn" data-action="bridge-key" data-key="×">Multiply</button>
+          <button class="btn" data-action="bridge-key" data-key="÷">Divide</button>
+          <button class="btn" data-action="bridge-key" data-key="sqrt">Square root</button>
+          <button class="btn" data-action="bridge-key" data-key="x^2">Exponent</button>
+        </div>
+        <div class="actions">
+          <button class="btn primary" data-action="bridge-tab" data-tab="practice">Back to question</button>
+        </div>
+      </div>
+    `;
+  }
+
   return `
-    <div class="bridge-card">
-      <span class="bridge-pill">Practice</span>
-      <h3 class="math-text">${escapeHtml(question.prompt)}</h3>
-      <p>${escapeHtml(bridgeInstruction(question))}</p>
-      ${renderAssignmentAnswerControl(item, question, questionIndex, answer, inputId)}
-      <div class="bridge-actions">
-        <button class="btn" data-action="bridge-help" data-assignment="${escapeHtml(item.id)}">Hint</button>
-        <button class="btn" data-action="bridge-show-steps">Show steps</button>
-        <button class="btn" data-action="bridge-tab" data-tab="lesson" ${item.videoUrl || item.videoLink ? "" : "disabled"}>Watch video</button>
-        <button class="btn primary" data-action="bridge-check" data-assignment="${escapeHtml(item.id)}">Check answer</button>
+    <div class="bridge-question-screen">
+      <div class="bridge-question-main">
+        <span class="bridge-question-number">${questionIndex + 1}.</span>
+        <div class="bridge-question-body">
+          <h2 class="math-text">${escapeHtml(question.prompt)}</h2>
+          <p>${escapeHtml(bridgeInstruction(question))}</p>
+          ${renderBridgeAnswerEntry(item, question, questionIndex, answer, inputId)}
+          <div class="bridge-actions">
+            <button class="btn" data-action="bridge-help" data-assignment="${escapeHtml(item.id)}">Hint</button>
+            <button class="btn" data-action="bridge-show-steps">Show steps</button>
+            <button class="btn" data-action="bridge-tab" data-tab="lesson" ${item.videoUrl || item.videoLink ? "" : "disabled"}>Watch video</button>
+            <button class="btn primary" data-action="bridge-check" data-assignment="${escapeHtml(item.id)}">Check answer</button>
+          </div>
+          <div class="bridge-working">
+            <label for="bridge-working-${safeDomId(item.id)}">Your working</label>
+            <textarea id="bridge-working-${safeDomId(item.id)}" data-bind="bridgeSpace.working" placeholder="Write your steps here. You can also use the math keyboard below.">${escapeHtml(state.bridgeSpace.working)}</textarea>
+          </div>
+        </div>
       </div>
-      <div class="bridge-working">
-        <label for="bridge-working-${safeDomId(item.id)}">Your working</label>
-        <textarea id="bridge-working-${safeDomId(item.id)}" data-bind="bridgeSpace.working" placeholder="Write or sketch your working here. You can also use the math keyboard below.">${escapeHtml(state.bridgeSpace.working)}</textarea>
-      </div>
-      ${state.bridgeSpace.notice ? `<div class="message-notice">${escapeHtml(state.bridgeSpace.notice)}</div>` : ""}
+      ${renderBridgeKeyboard(item)}
     </div>
   `;
+}
+
+function renderBridgeAnswerEntry(item, question, questionIndex, answer, inputId) {
+  const control = renderAssignmentAnswerControl(item, question, questionIndex, answer, inputId);
+  if (question.type === "text") {
+    return `
+      <div class="bridge-answer-line">
+        <span>=</span>
+        ${control.replace("placeholder=\"Type your answer\"", "placeholder=\"Enter your next step here\"")}
+      </div>
+    `;
+  }
+  return `<div class="bridge-choice-wrap">${control}</div>`;
+}
+
+function renderBridgeFeedback(item, isLastQuestion) {
+  const notice = state.bridgeSpace.notice || (state.workUpload.assignmentId === item.id ? state.workUpload.notice : "");
+  if (!notice) return "";
+  const kind = bridgeFeedbackKind(notice);
+  return `
+    <section class="bridge-feedback-panel ${kind}" aria-live="polite">
+      <div>
+        <strong>${kind === "success" ? "Nice. You're on the right track." : kind === "warning" ? "Try that one again." : "BridgeSpace update"}</strong>
+        <p>${escapeHtml(notice)}</p>
+      </div>
+      <button class="btn primary" data-action="${isLastQuestion ? "submit-work" : "bridge-next"}" data-assignment="${escapeHtml(item.id)}">
+        ${isLastQuestion ? "Submit to teacher" : "Continue"}
+      </button>
+    </section>
+  `;
+}
+
+function bridgeFeedbackKind(notice) {
+  if (/\b(correct|saved|submitted|messaged|verified|right track)\b/i.test(notice)) return "success";
+  if (/\b(not quite|try|recheck|first|add an answer)\b/i.test(notice)) return "warning";
+  return "info";
+}
+
+function bridgeAnswerHasValue(answer) {
+  return Array.isArray(answer)
+    ? answer.some((value) => String(value || "").trim())
+    : String(answer || "").trim().length > 0;
 }
 
 function renderBridgeKeyboard(item) {
@@ -7135,16 +7211,42 @@ function checkBridgeSpaceAnswer(assignmentId) {
   const questionIndex = Number(state.bridgeSpace.questionIndex) || 0;
   const question = normalizeHomeworkQuestion(assignment.questions?.[questionIndex]);
   const answer = answerDraftsForAssignment(assignment)[questionIndex];
-  const hasAnswer = Array.isArray(answer)
-    ? answer.length > 0
-    : String(answer || "").trim().length > 0;
+  const hasAnswer = bridgeAnswerHasValue(answer);
   if (question.prompt && !hasAnswer) {
     state.bridgeSpace.notice = "Add an answer first, then check it.";
     render();
     return;
   }
-  state.bridgeSpace.notice = "Answer saved. Your teacher can verify it after you submit.";
+  const match = bridgeAnswerMatchesKey(question, answer);
+  if (match === true) {
+    state.bridgeSpace.notice = "Correct. Your answer is saved.";
+  } else if (match === false) {
+    state.bridgeSpace.notice = "Not quite yet. Use a hint or recheck the question, then try again.";
+  } else {
+    state.bridgeSpace.notice = "Answer saved. Your teacher can verify it after you submit.";
+  }
   saveAssignmentAnswers(assignmentId);
+}
+
+function bridgeAnswerMatchesKey(question, answer) {
+  const answerKey = Array.isArray(question.answerKey)
+    ? question.answerKey.map(cleanQuestionAnswerValue).filter(Boolean)
+    : [];
+  if (!answerKey.length) return null;
+
+  if (question.type === "select-all") {
+    const expected = new Set(answerKey.map(normalizeAnswer));
+    const actual = new Set((Array.isArray(answer) ? answer : []).map(normalizeAnswer).filter(Boolean));
+    return expected.size === actual.size && [...expected].every((value) => actual.has(value));
+  }
+
+  if (question.type === "multiple-choice") {
+    const normalized = normalizeAnswer(answer);
+    return answerKey.some((expected) => normalizeAnswer(expected) === normalized);
+  }
+
+  const normalized = normalizeAnswer(answer);
+  return answerKey.some((expected) => normalizeAnswer(expected) === normalized);
 }
 
 function aiHelpAttemptForQuestion(assignment, questionIndex) {
