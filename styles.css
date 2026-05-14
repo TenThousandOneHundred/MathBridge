@@ -1570,6 +1570,21 @@ button.pill:hover {
   margin-top: 14px;
 }
 
+.youtube-panel {
+  min-height: auto;
+  padding: 0;
+  overflow: hidden;
+  background: #0f1715;
+}
+
+.lesson-video-frame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  background: #0f1715;
+}
+
 .lesson-file-preview[hidden],
 #lesson-file-preview-name[hidden],
 #lesson-placeholder-preview[hidden] {

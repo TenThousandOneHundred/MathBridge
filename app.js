@@ -2986,7 +2986,7 @@ function renderCreateAssignmentPage() {
           </div>
           <div class="field full">
             <label for="assignment-video-link">Lesson video link</label>
-            <input id="assignment-video-link" type="url" data-bind="draft.lessonVideoLink" value="${escapeHtml(state.draft.lessonVideoLink)}" placeholder="Optional if uploading a video file" />
+            <input id="assignment-video-link" type="url" data-bind="draft.lessonVideoLink" value="${escapeHtml(state.draft.lessonVideoLink)}" placeholder="Paste a YouTube link to play it inside MathBridge" />
           </div>
           ${renderDraftMaterialsPanel()}
           <div class="field full">
@@ -3427,7 +3427,7 @@ function renderMaterialUploadSections() {
           </div>
           <div class="field full">
             <label for="material-link">Link</label>
-            <input id="material-link" name="link" type="url" data-bind="materialDraft.link" value="${escapeHtml(state.materialDraft.link)}" placeholder="Optional link to a video or document" />
+            <input id="material-link" name="link" type="url" data-bind="materialDraft.link" value="${escapeHtml(state.materialDraft.link)}" placeholder="Paste a YouTube link or document link" />
           </div>
           <div class="actions field full">
             <button class="btn primary" type="submit" ${state.materialDraft.submitting ? "disabled" : ""}>
@@ -3471,7 +3471,7 @@ function renderUploadLessonPage() {
           </div>
           <div class="field full">
             <label for="lesson-video-link">Video link</label>
-            <input id="lesson-video-link" name="videoLink" type="url" data-bind="teacherLesson.videoLink" value="${escapeHtml(state.teacherLesson.videoLink)}" placeholder="Optional if uploading a file" />
+            <input id="lesson-video-link" name="videoLink" type="url" data-bind="teacherLesson.videoLink" value="${escapeHtml(state.teacherLesson.videoLink)}" placeholder="Paste a YouTube link to play it inside MathBridge" />
           </div>
           <div class="field full">
             <label for="lesson-explanation">Written explanation</label>
@@ -4734,6 +4734,21 @@ function renderLessonMedia(lesson, size = "card") {
     `;
   }
   if (lesson.videoLink) {
+    const youtubeEmbed = youtubeEmbedUrl(lesson.videoLink);
+    if (youtubeEmbed) {
+      return `
+        <div class="video-panel youtube-panel ${size === "large" ? "large" : ""}">
+          <iframe
+            class="lesson-video-frame"
+            src="${escapeHtml(youtubeEmbed)}"
+            title="${title}"
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen>
+          </iframe>
+        </div>
+      `;
+    }
     return `
       <div class="video-panel lesson-link-panel ${size === "large" ? "large" : ""}">
         <div class="video-inner">
@@ -4753,6 +4768,41 @@ function renderLessonMedia(lesson, size = "card") {
       </div>
     </div>
   `;
+}
+
+function youtubeEmbedUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (error) {
+    return "";
+  }
+
+  const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+  let videoId = "";
+  if (host === "youtu.be") {
+    videoId = parsed.pathname.split("/").filter(Boolean)[0] || "";
+  }
+  if (host === "youtube.com" || host === "m.youtube.com" || host === "music.youtube.com" || host === "youtube-nocookie.com") {
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parsed.pathname === "/watch") videoId = parsed.searchParams.get("v") || "";
+    else if (parts[0] === "embed" || parts[0] === "shorts" || parts[0] === "live") videoId = parts[1] || "";
+  }
+  if (!/^[a-zA-Z0-9_-]{6,}$/.test(videoId)) return "";
+
+  const startSeconds = youtubeStartSeconds(parsed.searchParams.get("start") || parsed.searchParams.get("t") || "");
+  const embed = new URL(`https://www.youtube-nocookie.com/embed/${videoId}`);
+  embed.searchParams.set("rel", "0");
+  if (startSeconds) embed.searchParams.set("start", String(startSeconds));
+  return embed.toString();
+}
+
+function youtubeStartSeconds(value) {
+  if (!value) return 0;
+  if (/^\d+$/.test(value)) return Number(value);
+  const match = value.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i);
+  if (!match) return 0;
+  return (Number(match[1]) || 0) * 3600 + (Number(match[2]) || 0) * 60 + (Number(match[3]) || 0);
 }
 
 function getLessonLibrary() {
